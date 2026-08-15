@@ -1,0 +1,22 @@
+# Local environment variables and credentials
+.env
+*.env
+!.env.example
+
+# Python environments and generated local data
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv-cache/
+.tools/
+models/
+log/
+volumes/
+uploads/
+admin_api/logs/
+
+# Query-router training artifacts
+model_trian_classify/logs/
+model_trian_classify/model/

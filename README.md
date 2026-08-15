@@ -33,6 +33,40 @@ tests/        与 src/ 模块一一对应的测试
 
 `master` 为受保护的稳定分支，`devlop` 为日常开发分支。功能分支从 `devlop` 创建；仅当功能完成、测试通过、代码审查完成并获人工批准后，才可合并至 `master`。
 
-## 当前状态
+## 本地知识库管理 API
 
-项目骨架初始化中。依赖管理、可执行开发命令、测试框架和部署配置将在对应模块开始实现前确定并补充。
+先在本机启动 MySQL、Redis、Milvus，再运行：
+
+```powershell
+uv sync --locked --all-groups
+uv run uvicorn admin_api.main:app --host 127.0.0.1 --port 8001
+```
+
+接口只允许监听 `127.0.0.1`，没有认证机制，不能改为对局域网或公网暴露。它提供 QA 的新增、导入、查询、删除，以及文档上传、异步入库、任务查询和删除。上传的原文件保存在被 Git 忽略的 `uploads/`；已完成文档删除时会清除其 Milvus 父子块和原文件，同时保留 MySQL 任务审计记录。
+
+开发验证命令：
+
+```powershell
+uv run pytest
+uv run ruff check .
+uv run mypy base
+```
+
+## 用户问答 API
+
+启动独立的用户问答入口：
+
+```powershell
+uv run uvicorn query_api.main:app --host 127.0.0.1 --port 8000
+```
+
+`POST /query` 会先检索 Redis + MySQL FAQ；FAQ 未命中后进行通用知识/专业咨询分类。
+通用知识使用原问题直接 RAG，专业咨询先改写，再执行 BGE-M3 稠密和稀疏混合检索、父块回查、
+BGE reranker 重排和带原文引用的回答。
+
+新建 Milvus collection 使用 `IVF_FLAT` 稠密索引（`nlist=128`），检索使用 `nprobe=10`。
+已有 collection 只在维护窗口执行以下显式命令进行切换：
+
+```powershell
+uv run python -m dataprocess.milvus_index --yes
+```

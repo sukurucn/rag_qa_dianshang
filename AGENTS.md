@@ -2,21 +2,22 @@
 
 ## 项目结构与模块组织
 
-本仓库是独立的电商问答 RAG 知识库项目。运行配置统一放在 `config/`；密码、API 密钥和连接字符串不得提交到版本控制。每项功能在 `src/` 下拥有独立模块，并在 `tests/` 下提供对应测试。例如：`src/documentIngestion/` 对应 `tests/documentIngestion/`，`src/retrieval/` 对应 `tests/retrieval/`。共享接口和领域模型应置于命名清晰的 `src/` 模块中，避免跨功能重复实现。
+本仓库是独立的电商问答 RAG 知识库项目。根目录 `base/` 提供共享配置与日志；功能代码位于 `src/`，并在 `tests/` 下提供对应测试。例如：`src/documentIngestion/` 对应 `tests/documentIngestion/`，`src/retrieval/` 对应 `tests/retrieval/`。共享接口和领域模型应置于命名清晰的 `src/` 模块中，避免跨功能重复实现。密码、API 密钥和连接字符串仅通过根目录 `.env` 或环境变量提供，绝不提交到版本控制。
 
 项目使用 Python 3.10，以 LangChain 和 LangGraph 编排 LLM 交互；Redis 用于缓存，Milvus 用于向量检索，MySQL 用于关系型业务数据。数据库访问层必须与文档处理、检索和回答生成逻辑隔离。
 
 ## 构建、测试与开发命令
 
-仓库目前尚未配置依赖管理工具或测试命令。首次实现前，必须确定并提交依赖与版本管理配置，并在此处补充可直接执行的命令。至少应支持：
+使用 `uv` 管理 Python 3.10 环境与依赖：
 
 ```powershell
-# 安装项目依赖
-# 运行全部测试
-# 执行代码检查和类型检查
+uv sync --all-groups
+uv run pytest
+uv run ruff check .
+uv run mypy base
 ```
 
-模块测试未在本地通过前不得合并。环境差异通过被忽略的配置文件或环境变量提供，严禁提交密钥。
+模块测试未在本地通过前不得合并。环境差异通过被忽略的配置文件或环境变量提供，严禁提交密钥。每次收到用户提示词后，必须按功能模块标题将原始提示词追加到根目录 `提示词.md`。
 
 ## 代码风格与命名规范
 
