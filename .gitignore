@@ -21,6 +21,7 @@ admin_api/logs/
 # Vue build artifacts
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
 
 # Query-router training artifacts
 model_trian_classify/logs/
