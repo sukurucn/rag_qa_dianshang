@@ -14,7 +14,15 @@ from model_trian_classify.query_router import QueryRouter
 from mysql_qa.mysql_client import MysqlQaClient
 from mysql_qa.redis_client import RedisQuestionCache
 from mysql_qa.service import MysqlQaService
-from query_api.schemas import QueryCitationResponse, QueryRequest, QueryResponse
+from query_api.feature_flags import FeatureFlagService, MysqlFeatureFlagStore
+from query_api.schemas import (
+    FeatureFlagsResponse,
+    FeatureFlagsUpdateRequest,
+    QueryCitationResponse,
+    QueryRequest,
+    QueryResponse,
+    WebCitationResponse,
+)
 from query_api.service import QueryAnswerService
 from question_rewrite.langchain_client import LangChainRewriteModel
 from question_rewrite.service import QuestionRewriteService
@@ -22,6 +30,7 @@ from rag_qa.answer_client import LangChainAnswerModel
 from rag_qa.reranker import BgeParentReranker
 from rag_qa.retriever import MilvusHybridRetriever
 from rag_qa.service import RagQaService
+from web_search.duckduckgo import DuckDuckGoWebSearcher
 
 _LOGGER = get_logger("query_api")
 
@@ -32,10 +41,12 @@ class QueryApiServices:
 
     mysql_client: MysqlQaClient
     redis_cache: RedisQuestionCache
+    feature_flags: FeatureFlagService
     answer_service: QueryAnswerService
 
     def start(self) -> None:
         """初始化 FAQ 表和缓存；失败时保留 RAG 服务能力。"""
+        self.feature_flags.start()
         try:
             self.mysql_client.initialize_schema()
             self.redis_cache.warmup(self.mysql_client)
@@ -45,13 +56,19 @@ class QueryApiServices:
     def stop(self) -> None:
         """关闭已创建的 MySQL 连接。"""
         self.mysql_client.close()
+        self.feature_flags.close()
 
 
 def create_default_services(app_settings: Settings = settings) -> QueryApiServices:
     """构建惰性加载的生产依赖。"""
+    if app_settings.configure_langsmith_tracing():
+        _LOGGER.info("LangSmith tracing enabled: project=%s", app_settings.langsmith_project)
+    else:
+        _LOGGER.info("LangSmith tracing disabled: no API key or tracing switch is off")
     mysql_client = MysqlQaClient(app_settings)
     redis_cache = RedisQuestionCache(app_settings)
     faq_service = MysqlQaService(app_settings, mysql_client, redis_cache)
+    feature_flags = FeatureFlagService(MysqlFeatureFlagStore(app_settings))
     query_router = QueryRouter()
     rewrite_service = QuestionRewriteService(app_settings, LangChainRewriteModel(app_settings))
     rag_service = RagQaService(
@@ -63,12 +80,15 @@ def create_default_services(app_settings: Settings = settings) -> QueryApiServic
     return QueryApiServices(
         mysql_client=mysql_client,
         redis_cache=redis_cache,
+        feature_flags=feature_flags,
         answer_service=QueryAnswerService(
             app_settings,
             faq_service,
             query_router,
             rewrite_service,
             rag_service,
+            feature_flags,
+            DuckDuckGoWebSearcher(app_settings),
         ),
     )
 
@@ -111,6 +131,30 @@ def create_app(
             faq_confidence=result.faq_confidence,
             classification_confidence=result.classification_confidence,
             fallback_reason=result.fallback_reason,
+            web_citations=[
+                WebCitationResponse(title=item.title, url=item.url, snippet=item.snippet)
+                for item in result.web_citations
+            ],
+            web_search_used=result.web_search_used,
+        )
+
+    @app.get("/runtime/features", response_model=FeatureFlagsResponse)
+    def get_feature_flags() -> FeatureFlagsResponse:
+        flags = active_services.feature_flags.current()
+        return FeatureFlagsResponse(
+            faq_enabled=flags.faq_enabled,
+            classifier_enabled=flags.classifier_enabled,
+        )
+
+    @app.patch("/runtime/features", response_model=FeatureFlagsResponse)
+    def update_feature_flags(payload: FeatureFlagsUpdateRequest) -> FeatureFlagsResponse:
+        flags = active_services.feature_flags.update(
+            faq_enabled=payload.faq_enabled,
+            classifier_enabled=payload.classifier_enabled,
+        )
+        return FeatureFlagsResponse(
+            faq_enabled=flags.faq_enabled,
+            classifier_enabled=flags.classifier_enabled,
         )
 
     return app

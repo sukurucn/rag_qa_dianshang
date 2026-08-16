@@ -9,6 +9,7 @@ from typing import Any, cast
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_openai import ChatOpenAI
+from langsmith import traceable
 
 from base.config import Settings
 from question_rewrite.models import RewriteModelResponse, RewriteStrategy
@@ -21,6 +22,7 @@ class LangChainRewriteModel:
         self._settings = settings
         self._chat_model = chat_model or self._create_chat_model()
 
+    @traceable(name="question_rewrite_llm", run_type="chain")
     def invoke(self, messages: Sequence[BaseMessage]) -> RewriteModelResponse:
         """调用模型，并提取结构化策略和模型返回的 token 用量。"""
         response = self._chat_model.invoke(list(messages))

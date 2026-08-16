@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class QueryRequest(BaseModel):
@@ -31,6 +31,14 @@ class QueryCitationResponse(BaseModel):
     text: str
 
 
+class WebCitationResponse(BaseModel):
+    """网络检索中使用的一条网页摘要。"""
+
+    title: str
+    url: str
+    snippet: str
+
+
 class QueryResponse(BaseModel):
     """FAQ 与 RAG 共用的 HTTP 响应。"""
 
@@ -41,3 +49,25 @@ class QueryResponse(BaseModel):
     faq_confidence: float
     classification_confidence: float | None = None
     fallback_reason: str | None = None
+    web_citations: list[WebCitationResponse] = Field(default_factory=list)
+    web_search_used: bool = False
+
+
+class FeatureFlagsResponse(BaseModel):
+    """前端可控制的问答模块开关。"""
+
+    faq_enabled: bool
+    classifier_enabled: bool
+
+
+class FeatureFlagsUpdateRequest(BaseModel):
+    """局部修改至少一个模块开关。"""
+
+    faq_enabled: bool | None = None
+    classifier_enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def requires_a_change(self) -> FeatureFlagsUpdateRequest:
+        if self.faq_enabled is None and self.classifier_enabled is None:
+            raise ValueError("at least one feature flag must be supplied")
+        return self

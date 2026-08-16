@@ -17,6 +17,15 @@ class QueryCitation:
 
 
 @dataclass(frozen=True)
+class WebCitation:
+    """网络检索使用的一条网页摘要。"""
+
+    title: str
+    url: str
+    snippet: str
+
+
+@dataclass(frozen=True)
 class QueryAnswer:
     """FAQ 或 RAG 统一返回的问答结果。"""
 
@@ -27,3 +36,5 @@ class QueryAnswer:
     faq_confidence: float
     classification_confidence: float | None = None
     fallback_reason: str | None = None
+    web_citations: tuple[WebCitation, ...] = ()
+    web_search_used: bool = False

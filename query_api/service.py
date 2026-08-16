@@ -7,9 +7,13 @@ from base.logger import get_logger
 from model_trian_classify.query_router import QueryRouter, RouteLabel
 from mysql_qa.models import MysqlQaResult
 from mysql_qa.service import MysqlQaService
-from query_api.models import QueryAnswer, QueryCitation
+from query_api.feature_flags import FeatureFlagService
+from query_api.models import QueryAnswer, QueryCitation, WebCitation
+from question_rewrite.models import RewriteResult
 from question_rewrite.service import QuestionRewriteService
+from rag_qa.models import WebSearchResult
 from rag_qa.service import RagQaService
+from web_search.duckduckgo import DuckDuckGoWebSearcher
 
 
 class QueryAnswerService:
@@ -22,12 +26,16 @@ class QueryAnswerService:
         query_router: QueryRouter,
         rewrite_service: QuestionRewriteService,
         rag_service: RagQaService,
+        feature_flags: FeatureFlagService,
+        web_searcher: DuckDuckGoWebSearcher,
     ) -> None:
         self._settings = app_settings
         self._faq_service = faq_service
         self._query_router = query_router
         self._rewrite_service = rewrite_service
         self._rag_service = rag_service
+        self._feature_flags = feature_flags
+        self._web_searcher = web_searcher
         self._logger = get_logger("query_api.service")
 
     def answer(self, question: str) -> QueryAnswer:
@@ -36,7 +44,16 @@ class QueryAnswerService:
         if not normalized_question:
             raise ValueError("question must not be empty")
 
-        faq_result = self._faq_service.answer(normalized_question)
+        flags = self._feature_flags.current()
+        faq_result = self._faq_service.answer(normalized_question) if flags.faq_enabled else MysqlQaResult(
+            answer=None,
+            confidence=0.0,
+            matched_question=None,
+            route_to_rag_qa=True,
+            question_for_rag_qa=normalized_question,
+        )
+        if not flags.faq_enabled:
+            self._logger.info("FAQ module disabled; routing directly past MySQL and Redis")
         if faq_result.answer is not None and not faq_result.route_to_rag_qa:
             self._logger.info("query answered by FAQ: confidence=%.4f", faq_result.confidence)
             return QueryAnswer(
@@ -47,20 +64,34 @@ class QueryAnswerService:
                 faq_confidence=faq_result.confidence,
             )
 
-        try:
-            decision = self._query_router.route(normalized_question)
-            classification = decision.label.value
-            classification_confidence = decision.confidence
-            classification_fallback = None
-        except Exception:
-            self._logger.exception("Query classification failed; treating question as professional")
-            classification = RouteLabel.PROFESSIONAL_CONSULTATION.value
-            classification_confidence = 0.0
-            classification_fallback = "classification_error"
+        classification: str | None = None
+        classification_confidence: float | None = None
+        classification_fallback: str | None = None
+        web_search_used = False
+        web_results: tuple[WebSearchResult, ...] = ()
+        if flags.classifier_enabled:
+            try:
+                decision = self._query_router.route(normalized_question)
+                classification = decision.label.value
+                classification_confidence = decision.confidence
+                if decision.target_route == "web_rag":
+                    web_search_used = True
+                    web_results = self._web_searcher.search(normalized_question)
+            except Exception:
+                self._logger.exception("Query classification failed; treating question as professional")
+                classification = RouteLabel.PROFESSIONAL_CONSULTATION.value
+                classification_confidence = 0.0
+                classification_fallback = "classification_error"
+        else:
+            self._logger.info("Intent-classifier module disabled; routing directly to RAG")
 
         try:
-            rewrite_result = self._rewrite_service.rewrite(normalized_question, classification)
-            rag_result = self._rag_service.answer(rewrite_result)
+            rewrite_result = (
+                self._rewrite_service.rewrite(normalized_question, classification)
+                if classification is not None
+                else RewriteResult(normalized_question, (normalized_question,), (), 0, 0, 0)
+            )
+            rag_result = self._rag_service.answer(rewrite_result, web_results)
         except Exception:
             self._logger.exception("Query orchestration failed; returning customer service phone")
             return self._customer_service(faq_result, classification, classification_confidence)
@@ -73,6 +104,10 @@ class QueryAnswerService:
                 text=parent.text,
             )
             for parent in rag_result.parents
+        )
+        web_citations = tuple(
+            WebCitation(title=result.title, url=result.url, snippet=result.snippet)
+            for result in rag_result.web_results
         )
         self._logger.info(
             "query answered by RAG: classification=%s citations=%s fallback=%s",
@@ -88,13 +123,15 @@ class QueryAnswerService:
             faq_confidence=faq_result.confidence,
             classification_confidence=classification_confidence,
             fallback_reason=rag_result.fallback_reason or classification_fallback,
+            web_citations=web_citations,
+            web_search_used=web_search_used,
         )
 
     def _customer_service(
         self,
         faq_result: MysqlQaResult,
-        classification: str,
-        classification_confidence: float,
+        classification: str | None,
+        classification_confidence: float | None,
     ) -> QueryAnswer:
         return QueryAnswer(
             answer=f"客服电话：{self._settings.rag_customer_service_phone}",

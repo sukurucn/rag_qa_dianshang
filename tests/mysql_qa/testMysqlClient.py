@@ -83,3 +83,14 @@ def testLoadsQuestionsAndAnswer() -> None:
 
     assert client.list_questions()[0].question == "如何退款？"
     assert client.get_answer("id-1").answer == "请在订单页申请退款。"
+
+
+def testReadOperationsResetTransactionSnapshot() -> None:
+    connection = FakeConnection([("id-1", "退款流程是什么？", "请在订单页申请退款。")])
+    client = MysqlQaClient(make_settings(), connection_factory=lambda **_: connection)
+
+    client.list_questions()
+    client.get_answer("id-1")
+
+    assert connection.rollback_count == 2
+    assert connection.cursor_instance.executions[-1][1] == ("id-1",)

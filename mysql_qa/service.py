@@ -54,7 +54,8 @@ class MysqlQaService:
                     user_question, "low_confidence", best_match.confidence, best_match.question.question
                 )
 
-            record = self._mysql_client.get_answer(best_match.question.question_id)
+            matched_question_id = best_match.question.question_id
+            record = self._mysql_client.get_answer(matched_question_id)
             if record is None or record.answer is None:
                 return self._route_to_rag_qa(
                     user_question,
@@ -62,10 +63,22 @@ class MysqlQaService:
                     best_match.confidence,
                     best_match.question.question,
                 )
+            if record.question_id != matched_question_id:
+                self._logger.error(
+                    "mysql_qa answer ID mismatch: redis_question_id=%s mysql_question_id=%s",
+                    matched_question_id,
+                    record.question_id,
+                )
+                return self._route_to_rag_qa(
+                    user_question,
+                    "mysql_answer_id_mismatch",
+                    best_match.confidence,
+                    best_match.question.question,
+                )
             return MysqlQaResult(
                 answer=record.answer,
                 confidence=best_match.confidence,
-                matched_question=record.question,
+                matched_question=best_match.question.question,
                 route_to_rag_qa=False,
             )
         except Exception:
@@ -92,7 +105,7 @@ class MysqlQaService:
             )
 
         decision = self._query_router.route(user_question)
-        route_to_rag_qa = decision.target_route == "rag_qa"
+        route_to_rag_qa = decision.target_route in {"rag_qa", "web_rag"}
         self._logger.info(
             "FAQ unresolved route: reason=%s label=%s router_confidence=%.4f target=%s",
             reason,

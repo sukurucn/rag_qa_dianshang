@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from pydantic import ValidationError
 
@@ -40,3 +42,48 @@ def testRejectsMissingRequiredDatabaseSettings(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def testConfiguresLangsmithTracingOnlyWhenAKeyIsAvailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    settings = Settings(
+        _env_file=None,
+        mysql_host="127.0.0.1",
+        mysql_user="rag_user",
+        mysql_password="password",
+        mysql_database="rag_db",
+        redis_host="127.0.0.1",
+        redis_password="password",
+        milvus_host="127.0.0.1",
+        milvus_user="root",
+        milvus_password="password",
+        langsmith_api_key="langsmith-test-key",
+        langsmith_project="rag-test",
+    )
+    monkeypatch.delenv("LANGSMITH_ENDPOINT", raising=False)
+    monkeypatch.delenv("LANGSMITH_WORKSPACE_ID", raising=False)
+
+    assert settings.configure_langsmith_tracing() is True
+    assert os.environ["LANGSMITH_TRACING"] == "true"
+    assert os.environ["LANGSMITH_API_KEY"] == "langsmith-test-key"
+    assert os.environ["LANGSMITH_PROJECT"] == "rag-test"
+
+
+def testDisablesLangsmithTracingWhenNoKeyIsConfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(
+        _env_file=None,
+        mysql_host="127.0.0.1",
+        mysql_user="rag_user",
+        mysql_password="password",
+        mysql_database="rag_db",
+        redis_host="127.0.0.1",
+        redis_password="password",
+        milvus_host="127.0.0.1",
+        milvus_user="root",
+        milvus_password="password",
+        langsmith_api_key=None,
+    )
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+
+    assert settings.configure_langsmith_tracing() is False
+    assert os.environ["LANGSMITH_TRACING"] == "false"

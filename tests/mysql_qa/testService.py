@@ -47,6 +47,34 @@ def testMatcherUsesSoftmaxNormalizedInnerProductScores() -> None:
     assert sum(match.confidence for match in matches) == 1.0
 
 
+def testJiebaStopsGenericTermsFromCreatingAnUnrelatedFaqMatch() -> None:
+    candidate = QuestionAnswer(
+        question_id="string-search",
+        question="如何实现在一段字符串中显示某个字符串多次出现的位置",
+    )
+
+    matches = Bm25InnerProductMatcher().match("混合精度在实际中如何实现的？", [candidate])
+
+    assert matches[0].score == 0.0
+
+
+def testRoutesToRagQaWhenJiebaHasNoDomainTermOverlap() -> None:
+    settings = make_settings().model_copy(update={"mysql_qa_threshold": 0.5})
+    candidate = QuestionAnswer(
+        question_id="string-search",
+        question="如何实现在一段字符串中显示某个字符串多次出现的位置",
+    )
+    mysql_client = FakeMysqlClient(None)
+    service = MysqlQaService(settings, mysql_client, FakeRedisCache([candidate]))  # type: ignore[arg-type]
+
+    result = service.answer("混合精度在实际中如何实现的？")
+
+    assert mysql_client.requested_id is None
+    assert result.answer is None
+    assert result.route_to_rag_qa is True
+    assert result.fallback_reason == "no_bm25_overlap"
+
+
 def testReturnsMysqlAnswerWhenConfidenceReachesThreshold() -> None:
     settings = make_settings().model_copy(update={"mysql_qa_threshold": 0.5})
     question = QuestionAnswer(question_id="refund", question="如何申请退款", answer="请在订单页申请退款。")
@@ -58,6 +86,25 @@ def testReturnsMysqlAnswerWhenConfidenceReachesThreshold() -> None:
     assert result.answer == "请在订单页申请退款。"
     assert result.route_to_rag_qa is False
     assert mysql_client.requested_id == "refund"
+
+
+def testDoesNotReturnMysqlAnswerForADifferentRedisQuestionId() -> None:
+    settings = make_settings().model_copy(update={"mysql_qa_threshold": 0.5})
+    cached_question = QuestionAnswer(question_id="return-policy", question="return policy")
+    wrong_record = QuestionAnswer(
+        question_id="shipping-policy",
+        question="shipping policy",
+        answer="This answer must not be returned.",
+    )
+    mysql_client = FakeMysqlClient(wrong_record)
+    service = MysqlQaService(settings, mysql_client, FakeRedisCache([cached_question]))  # type: ignore[arg-type]
+
+    result = service.answer("return policy")
+
+    assert mysql_client.requested_id == "return-policy"
+    assert result.answer is None
+    assert result.route_to_rag_qa is True
+    assert result.fallback_reason == "mysql_answer_id_mismatch"
 
 
 def testRoutesToRagQaWhenConfidenceIsInsufficient() -> None:

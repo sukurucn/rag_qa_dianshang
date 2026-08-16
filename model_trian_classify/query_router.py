@@ -78,7 +78,7 @@ class HuggingFaceQueryPredictor:
 
 
 class QueryRouter:
-    """分类 FAQ 未命中的问题；两类问题均由统一 RAG 流程回答。"""
+    """分类 FAQ 未命中的问题，区分通用知识的网络补充路径。"""
 
     def __init__(
         self,
@@ -109,7 +109,11 @@ class QueryRouter:
         if label_id not in ID_TO_LABEL:
             raise RuntimeError(f"The model returned unsupported label id: {label_id}")
         label = RouteLabel(ID_TO_LABEL[label_id])
-        target_route = "rag_qa"
+        target_route = (
+            "web_rag"
+            if label is RouteLabel.GENERAL_KNOWLEDGE and confidence >= self._confidence_threshold
+            else "rag_qa"
+        )
         self._logger.info(
             "query router: label=%s confidence=%.4f target=%s",
             label.value,

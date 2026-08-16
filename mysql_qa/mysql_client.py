@@ -151,6 +151,7 @@ class MysqlQaClient:
                     (limit, offset),
                 )
                 rows: Sequence[tuple[str, str, str]] = cursor.fetchall()
+            self._finish_read_transaction()
             return [QuestionAnswer(question_id=row[0], question=row[1], answer=row[2]) for row in rows]
         except Exception:
             self._logger.exception("Failed to list mysql_qa records")
@@ -186,6 +187,7 @@ class MysqlQaClient:
             with connection.cursor() as cursor:
                 cursor.execute(f"SELECT id, question FROM `{table_name}`")
                 rows: Sequence[tuple[str, str]] = cursor.fetchall()
+            self._finish_read_transaction()
             questions = [QuestionAnswer(question_id=row[0], question=row[1]) for row in rows]
             self._logger.info("Loaded mysql_qa questions: count=%s", len(questions))
             return questions
@@ -201,9 +203,10 @@ class MysqlQaClient:
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    f"SELECT id, question, answer FROM `{table_name}` WHERE id = %s", question_id
+                    f"SELECT id, question, answer FROM `{table_name}` WHERE id = %s", (question_id,)
                 )
                 row: tuple[str, str, str] | None = cursor.fetchone()
+            self._finish_read_transaction()
             if row is None:
                 self._logger.warning("mysql_qa answer not found: question_id=%s", question_id)
                 return None
@@ -224,3 +227,8 @@ class MysqlQaClient:
         self.connect()
         assert self._connection is not None
         return self._connection
+
+    def _finish_read_transaction(self) -> None:
+        """结束只读事务，避免长连接在 REPEATABLE READ 下保留旧快照。"""
+        connection = self._require_connection()
+        connection.rollback()

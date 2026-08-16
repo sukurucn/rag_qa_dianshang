@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 
 from question_rewrite.models import RewriteResult
 from rag_qa.answer_client import LangChainAnswerModel
-from rag_qa.models import ParentChunk, RetrievalReport
+from rag_qa.models import ParentChunk, RetrievalReport, WebSearchResult
 from rag_qa.service import RagQaService
 from tests.mysql_qa.testMysqlClient import make_settings
 
@@ -40,10 +40,15 @@ class FakeReranker:
 class FakeAnswerModel:
     def __init__(self, response: str) -> None:
         self._response = response
-        self.calls: list[tuple[str, tuple[ParentChunk, ...]]] = []
+        self.calls: list[tuple[str, tuple[ParentChunk, ...], tuple[WebSearchResult, ...]]] = []
 
-    def answer(self, question: str, parents: Sequence[ParentChunk]) -> str:
-        self.calls.append((question, tuple(parents)))
+    def answer(
+        self,
+        question: str,
+        parents: Sequence[ParentChunk],
+        web_results: Sequence[WebSearchResult] = (),
+    ) -> str:
+        self.calls.append((question, tuple(parents), tuple(web_results)))
         return self._response
 
 
@@ -106,6 +111,18 @@ def testAnswersDirectlyWithSingleParent() -> None:
     assert answer_model.calls[0][1] == (only_parent,)
 
 
+def testAnswersWithWebContextWhenMilvusHasNoParent() -> None:
+    service, _, answer_model = make_service(RetrievalReport((), 0, 0), [])
+    web_result = WebSearchResult("Python", "https://example.test/python", "Python 是一种语言")
+
+    result = service.answer(rewrite_result(), (web_result,))
+
+    assert result.fallback_reason is None
+    assert result.web_results == (web_result,)
+    assert answer_model.calls[0][1] == ()
+    assert answer_model.calls[0][2] == (web_result,)
+
+
 def testReranksMultipleParentsUsingAllRewriteAndHydeQueries() -> None:
     parents = (parent("one"), parent("two"), parent("three"))
     service, reranker, answer_model = make_service(
@@ -153,3 +170,24 @@ def testAnswerPromptContainsOriginalParentTextAndSourceMetadata() -> None:
     assert "来源：course.md" in prompt
     assert "章节：费用" in prompt
     assert "原文：课程费用为 100 元" in prompt
+    assert "本地 RAG 原文（优先级最高）" in prompt
+
+
+def testAnswerPromptMarksWebContentAsSupplementary() -> None:
+    chat_model = FakeChatModel("网络补充答案")
+    answer_model = LangChainAnswerModel(
+        make_settings(),
+        chat_model=cast(BaseChatModel, cast(Any, chat_model)),
+    )
+
+    answer_model.answer(
+        "Python 是什么？",
+        [ParentChunk("parent-1", "course.md", "费用", "课程费用为 100 元")],
+        [WebSearchResult("Python", "https://example.test/python", "Python 是一种编程语言")],
+    )
+
+    system_prompt = str(chat_model.messages[0].content)
+    user_prompt = str(chat_model.messages[1].content)
+    assert "本地知识库（RAG）原文是最高优先级事实依据" in system_prompt
+    assert "网络检索摘要（仅补充）" in user_prompt
+    assert "https://example.test/python" in user_prompt

@@ -20,6 +20,15 @@ class ParentChunk:
 
 
 @dataclass(frozen=True)
+class WebSearchResult:
+    """一条可展示、可供大模型补充参考的网页摘要。"""
+
+    title: str
+    url: str
+    snippet: str
+
+
+@dataclass(frozen=True)
 class RetrievalReport:
     """双路子块检索及父块去重后的观测数据。"""
 
@@ -35,6 +44,7 @@ class RagQaResult:
     answer: str
     parents: tuple[ParentChunk, ...]
     fallback_reason: str | None = None
+    web_results: tuple[WebSearchResult, ...] = ()
 
 
 class Embedder(Protocol):
@@ -61,5 +71,10 @@ class ParentReranker(Protocol):
 class AnswerModel(Protocol):
     """只根据指定父块生成可引用回答的模型。"""
 
-    def answer(self, question: str, parents: Sequence[ParentChunk]) -> str:
+    def answer(
+        self,
+        question: str,
+        parents: Sequence[ParentChunk],
+        web_results: Sequence[WebSearchResult] = (),
+    ) -> str:
         """回答问题；无依据时返回约定的 UNANSWERABLE 标记。"""

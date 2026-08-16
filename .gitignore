@@ -16,6 +16,7 @@ log/
 volumes/
 uploads/
 admin_api/logs/
+.streamlit/secrets.toml
 
 # Query-router training artifacts
 model_trian_classify/logs/

@@ -3,14 +3,42 @@
 from __future__ import annotations
 
 import math
-import re
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+import jieba  # type: ignore[import-untyped]
+
 from mysql_qa.models import QuestionAnswer
 
-TOKEN_PATTERN = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]", re.IGNORECASE)
+STOPWORDS = frozenset(
+    {
+        "的",
+        "了",
+        "在",
+        "中",
+        "是",
+        "和",
+        "与",
+        "及",
+        "或",
+        "如何",
+        "怎么",
+        "怎样",
+        "什么",
+        "请问",
+        "把",
+        "将",
+        "一个",
+        "一段",
+        "实现",
+        "使用",
+        "进行",
+        "相关",
+        "问题",
+        "方法",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -23,14 +51,14 @@ class Match:
 
 
 class Bm25InnerProductMatcher:
-    """以 BM25 词权重向量的内积（IP）计算词法相似度。"""
+    """以 jieba 分词和 BM25-IP 在 Redis 全量 FAQ 候选中计算词法相似度。"""
 
     def __init__(self, k1: float = 1.5, b: float = 0.75) -> None:
         self._k1 = k1
         self._b = b
 
     def match(self, query: str, candidates: Sequence[QuestionAnswer]) -> list[Match]:
-        """返回按分数降序排列、且已 softmax 归一化的候选结果。"""
+        """在全部 Redis 候选中计算分数，并对全局分数执行一次 softmax。"""
         query_terms = self._tokenize(query)
         if not query_terms or not candidates:
             return []
@@ -84,4 +112,9 @@ class Bm25InnerProductMatcher:
 
     @staticmethod
     def _tokenize(text: str) -> list[str]:
-        return TOKEN_PATTERN.findall(text.lower())
+        """使用 jieba.lcut 分词并过滤不承载领域语义的通用词。"""
+        return [
+            token
+            for token in jieba.lcut(text.lower())
+            if token.isalnum() and token not in STOPWORDS
+        ]

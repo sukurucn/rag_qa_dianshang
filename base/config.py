@@ -1,5 +1,6 @@
 """从根目录 .env 加载应用基础设施配置。"""
 
+import os
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -68,6 +69,13 @@ class Settings(BaseSettings):
     rag_customer_service_phone: str = Field(
         default="30129032", validation_alias="RAG_CUSTOMER_SERVICE_PHONE"
     )
+    web_search_max_results: int = Field(
+        default=5, validation_alias="WEB_SEARCH_MAX_RESULTS", ge=1, le=10
+    )
+    web_search_timeout_seconds: int = Field(
+        default=10, validation_alias="WEB_SEARCH_TIMEOUT_SECONDS", ge=1, le=30
+    )
+    web_search_region: str = Field(default="cn-zh", validation_alias="WEB_SEARCH_REGION")
     milvus_dense_index_nlist: int = Field(
         default=128, validation_alias="MILVUS_DENSE_INDEX_NLIST", ge=1
     )
@@ -81,6 +89,12 @@ class Settings(BaseSettings):
     milvus_password: SecretStr = Field(validation_alias="MILVUS_PASSWORD")
     milvus_database: str = Field(default="default", validation_alias="MILVUS_DATABASE")
     mineru_api_key: SecretStr | None = Field(default=None, validation_alias="MINERU_API_KEY")
+
+    langsmith_tracing: bool = Field(default=True, validation_alias="LANGSMITH_TRACING")
+    langsmith_api_key: SecretStr | None = Field(default=None, validation_alias="LANGSMITH_API_KEY")
+    langsmith_project: str = Field(default="rag-agentic-local", validation_alias="LANGSMITH_PROJECT")
+    langsmith_endpoint: str | None = Field(default=None, validation_alias="LANGSMITH_ENDPOINT")
+    langsmith_workspace_id: str | None = Field(default=None, validation_alias="LANGSMITH_WORKSPACE_ID")
 
     @property
     def mysql_url(self) -> str:
@@ -108,6 +122,26 @@ class Settings(BaseSettings):
     def milvus_token(self) -> str:
         """返回 pymilvus 使用的 user:password 认证令牌。"""
         return f"{self.milvus_user}:{self.milvus_password.get_secret_value()}"
+
+    def configure_langsmith_tracing(self) -> bool:
+        """在创建 LangChain 模型前，将可选的 LangSmith 配置写入进程环境。"""
+        if not self.langsmith_tracing or self.langsmith_api_key is None:
+            os.environ["LANGSMITH_TRACING"] = "false"
+            return False
+
+        os.environ["LANGSMITH_TRACING"] = "true"
+        os.environ["LANGSMITH_API_KEY"] = self.langsmith_api_key.get_secret_value()
+        os.environ["LANGSMITH_PROJECT"] = self.langsmith_project
+        self._set_optional_env("LANGSMITH_ENDPOINT", self.langsmith_endpoint)
+        self._set_optional_env("LANGSMITH_WORKSPACE_ID", self.langsmith_workspace_id)
+        return True
+
+    @staticmethod
+    def _set_optional_env(name: str, value: str | None) -> None:
+        if value:
+            os.environ[name] = value
+        else:
+            os.environ.pop(name, None)
 
 
 # Pydantic Settings fills these required values from the root .env at runtime.
