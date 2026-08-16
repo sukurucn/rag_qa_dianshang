@@ -147,7 +147,12 @@ class FeatureFlagService:
         with self._lock:
             return self._flags
 
-    def update(self, *, faq_enabled: bool | None, classifier_enabled: bool | None) -> FeatureFlags:
+    def update(
+        self,
+        *,
+        faq_enabled: bool | None,
+        classifier_enabled: bool | None,
+    ) -> FeatureFlags:
         if faq_enabled is None and classifier_enabled is None:
             raise ValueError("at least one feature flag must be supplied")
         with self._lock:

@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 
 from question_rewrite.models import RewriteResult
 from rag_qa.answer_client import LangChainAnswerModel
-from rag_qa.models import ParentChunk, RetrievalReport, WebSearchResult
+from rag_qa.models import AnswerGeneration, ParentChunk, RetrievalReport, WebSearchResult
 from rag_qa.service import RagQaService
 from tests.mysql_qa.testMysqlClient import make_settings
 
@@ -40,25 +40,29 @@ class FakeReranker:
 class FakeAnswerModel:
     def __init__(self, response: str) -> None:
         self._response = response
-        self.calls: list[tuple[str, tuple[ParentChunk, ...], tuple[WebSearchResult, ...]]] = []
+        self.calls: list[tuple[str, tuple[ParentChunk, ...]]] = []
 
     def answer(
         self,
         question: str,
         parents: Sequence[ParentChunk],
-        web_results: Sequence[WebSearchResult] = (),
-    ) -> str:
-        self.calls.append((question, tuple(parents), tuple(web_results)))
-        return self._response
+    ) -> AnswerGeneration:
+        self.calls.append((question, tuple(parents)))
+        return AnswerGeneration(self._response)
 
 
 class FakeChatModel:
-    def __init__(self, response: str) -> None:
+    def __init__(self, response: str | list[AIMessage]) -> None:
         self._response = response
         self.messages: list[BaseMessage] = []
 
+    def bind_tools(self, tools: list[object]) -> FakeChatModel:
+        return self
+
     def invoke(self, messages: list[BaseMessage]) -> AIMessage:
         self.messages = messages
+        if isinstance(self._response, list):
+            return self._response.pop(0)
         return AIMessage(content=self._response)
 
 
@@ -88,15 +92,15 @@ def make_service(
     return service, reranker, answer_model
 
 
-def testReturnsCustomerServiceWhenNoParentContext() -> None:
+def testLetsAnswerAgentHandleEmptyMilvusContext() -> None:
     service, reranker, answer_model = make_service(RetrievalReport((), 0, 0), [])
 
     result = service.answer(rewrite_result())
 
-    assert result.answer == "客服电话：30129032"
-    assert result.fallback_reason == "no_parent_context"
+    assert result.answer == "课程费用见报价单。"
+    assert result.fallback_reason is None
     assert reranker.was_called is False
-    assert answer_model.calls == []
+    assert answer_model.calls[0][1] == ()
 
 
 def testAnswersDirectlyWithSingleParent() -> None:
@@ -111,16 +115,13 @@ def testAnswersDirectlyWithSingleParent() -> None:
     assert answer_model.calls[0][1] == (only_parent,)
 
 
-def testAnswersWithWebContextWhenMilvusHasNoParent() -> None:
+def testAnswersWithEmptyMilvusContextLetsAgentUseTools() -> None:
     service, _, answer_model = make_service(RetrievalReport((), 0, 0), [])
-    web_result = WebSearchResult("Python", "https://example.test/python", "Python 是一种语言")
-
-    result = service.answer(rewrite_result(), (web_result,))
+    result = service.answer(rewrite_result())
 
     assert result.fallback_reason is None
-    assert result.web_results == (web_result,)
+    assert result.web_results == ()
     assert answer_model.calls[0][1] == ()
-    assert answer_model.calls[0][2] == (web_result,)
 
 
 def testReranksMultipleParentsUsingAllRewriteAndHydeQueries() -> None:
@@ -165,7 +166,7 @@ def testAnswerPromptContainsOriginalParentTextAndSourceMetadata() -> None:
 
     answer = answer_model.answer("学费是多少？", [ParentChunk("parent-1", "course.md", "费用", "课程费用为 100 元")])
 
-    assert answer.startswith("费用请参考")
+    assert answer.text.startswith("费用请参考")
     prompt = str(chat_model.messages[1].content)
     assert "来源：course.md" in prompt
     assert "章节：费用" in prompt
@@ -173,21 +174,47 @@ def testAnswerPromptContainsOriginalParentTextAndSourceMetadata() -> None:
     assert "本地 RAG 原文（优先级最高）" in prompt
 
 
-def testAnswerPromptMarksWebContentAsSupplementary() -> None:
+def testAnswerPromptLetsAgentUseWebOnlyAsSupplement() -> None:
     chat_model = FakeChatModel("网络补充答案")
     answer_model = LangChainAnswerModel(
         make_settings(),
         chat_model=cast(BaseChatModel, cast(Any, chat_model)),
     )
 
-    answer_model.answer(
-        "Python 是什么？",
-        [ParentChunk("parent-1", "course.md", "费用", "课程费用为 100 元")],
-        [WebSearchResult("Python", "https://example.test/python", "Python 是一种编程语言")],
-    )
+    answer_model.answer("Python 是什么？", [ParentChunk("parent-1", "course.md", "费用", "课程费用为 100 元")])
 
     system_prompt = str(chat_model.messages[0].content)
     user_prompt = str(chat_model.messages[1].content)
     assert "本地知识库（RAG）原文是最高优先级事实依据" in system_prompt
-    assert "网络检索摘要（仅补充）" in user_prompt
-    assert "https://example.test/python" in user_prompt
+    assert "search_web 工具" in system_prompt
+    assert "自行决定是否调用" in system_prompt
+    assert "本地 RAG 原文（优先级最高）" in user_prompt
+
+
+def testAnswerAgentInvokesWebToolOnlyWhenModelRequestsIt() -> None:
+    tool_request = AIMessage(
+        content="",
+        tool_calls=[{"name": "search_web", "args": {"query": "Python"}, "id": "call-1"}],
+    )
+    chat_model = FakeChatModel([tool_request, AIMessage(content="Python 是一种编程语言。")])
+
+    class FakeWebSearcher:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def search(self, query: str) -> tuple[WebSearchResult, ...]:
+            self.queries.append(query)
+            return (WebSearchResult("Python", "https://example.test/python", "编程语言"),)
+
+    web_searcher = FakeWebSearcher()
+    answer_model = LangChainAnswerModel(
+        make_settings(),
+        chat_model=cast(BaseChatModel, cast(Any, chat_model)),
+        web_searcher=web_searcher,  # type: ignore[arg-type]
+    )
+
+    answer = answer_model.answer("Python 是什么？", ())
+
+    assert web_searcher.queries == ["Python"]
+    assert answer.text == "Python 是一种编程语言。"
+    assert answer.web_results[0].url == "https://example.test/python"

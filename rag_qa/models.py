@@ -29,6 +29,14 @@ class WebSearchResult:
 
 
 @dataclass(frozen=True)
+class AnswerGeneration:
+    """Agent 最终文本及其实际调用网络工具获得的摘要。"""
+
+    text: str
+    web_results: tuple[WebSearchResult, ...] = ()
+
+
+@dataclass(frozen=True)
 class RetrievalReport:
     """双路子块检索及父块去重后的观测数据。"""
 
@@ -71,10 +79,5 @@ class ParentReranker(Protocol):
 class AnswerModel(Protocol):
     """只根据指定父块生成可引用回答的模型。"""
 
-    def answer(
-        self,
-        question: str,
-        parents: Sequence[ParentChunk],
-        web_results: Sequence[WebSearchResult] = (),
-    ) -> str:
+    def answer(self, question: str, parents: Sequence[ParentChunk]) -> AnswerGeneration:
         """回答问题；无依据时返回约定的 UNANSWERABLE 标记。"""

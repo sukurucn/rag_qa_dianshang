@@ -10,7 +10,7 @@
 - 文档入库：支持 TXT、MD、DOCX、PDF、PPT/PPTX。PDF 与演示文稿经 MinerU 解析；超过 99 页的 PDF 自动拆分后处理。
 - 结构化父子分块：Markdown 标题、表格、代码块保留结构；子块约 300 字符、相邻重叠 50 字符；约 5 个子块组成一个父块，父块相邻共享 1 个子块。
 - 向量检索：BGE-M3 生成 1024 维稠密向量与稀疏词法向量，存入现有 Milvus collection `document_chunks_v2`。
-- 问答路由：FAQ 未命中时，由微调/蒸馏后的中文小模型判断“通用知识”或“专业咨询”；通用知识会以 DuckDuckGo 网页摘要补充本地 RAG，专业咨询会先执行问题改写。
+- 问答路由：FAQ 未命中时，可由微调/蒸馏后的中文小模型判断“通用知识”或“专业咨询”；两类问题都会先进入本地 Milvus RAG，专业咨询额外执行问题改写。分类关闭时原问题也会直接进入本地 RAG。
 - RAG 回答：稠密/稀疏混合检索、父块回查、BGE reranker 重排，并返回引用原文；本地 RAG 原文始终高于网络摘要。
 - 模块控制：Streamlit 的“模块控制”页可持久开关 FAQ（MySQL + Redis）和意图分类；关闭任一模块会跳过它直接进入 RAG。
 - 本地管理 API：管理 QA、上传文档、查询异步入库任务、删除已入库文档及其 Milvus 父子块。
@@ -22,18 +22,29 @@ flowchart LR
     U[用户问题] --> F[Redis BM25 FAQ 匹配]
     F -->|高置信度| M[(MySQL QA)]
     M --> A[FAQ 答案]
-    F -->|未命中| C[中文分类模型]
+    F -->|未命中且分类开启| C[中文分类模型]
+    F -->|未命中且分类关闭| H[Milvus 混合检索与重排]
     C -->|专业咨询| R[问题改写]
-    C -->|通用知识| W[DuckDuckGo 网络补充]
-    W --> H
+    C -->|通用知识| H
     R --> H
     D[上传文档] --> P[解析 / OCR / 父子分块]
     P --> V[BGE-M3 CUDA 向量化]
     V --> S[(Milvus)]
-    H --> S
-    S --> X[父块回查与重排]
-    X --> G[带引用的 RAG 回答]
+    S --> H
+    H --> T[回答 Agent：本地原文优先]
+    T -. 仅在信息不足或需要最新公开信息时 .-> W[DuckDuckGo 网络搜索工具]
+    W --> T
+    T --> G[带引用的 RAG 回答]
 ```
+
+### 联网工具的调用规则
+
+`search_web` 是只交给回答 Agent 的 DuckDuckGo 工具，不是分类器的固定分支：
+
+- Agent 先读取 Milvus 返回并经 BGE Reranker 筛选后的本地父块；本地内容足以回答时不联网。
+- 只有本地上下文缺失、需要补充公开信息或需要较新的公开知识时，Agent 才能调用一次或多次 `search_web`。
+- 网络摘要只能补充，不能覆盖本地原文；发生冲突时以本地原文为准。接口的 `web_search_used`、`web_citations` 会如实反映本次是否实际联网。
+- 当前大模型端点必须支持 OpenAI 兼容的 tool calling；若端点不支持，服务会记录错误并安全降级为只使用本地 RAG，不会在检索前偷偷联网。
 
 ## 项目结构
 
@@ -75,9 +86,10 @@ model_trian_classify/model/best_model/     四层中文 RoBERTa 蒸馏学生模�
 
 - 修复本地 BGE Reranker 与 Transformers 的兼容性，并恢复 GPU 重排序。
 - FAQ 使用 jieba 分词与全量 Redis 问题 softmax 置信度；MySQL 读取事务快照已修复。
-- 通用知识使用 DuckDuckGo 网络摘要补充本地 RAG，回答提示词规定本地原文优先。
+- 所有 RAG 问题先完成 Milvus 检索与重排；回答 Agent 再自行决定是否调用 DuckDuckGo 工具补充公开信息，回答提示词规定本地原文优先。
 - 新增持久化模块开关和 Streamlit 首页侧栏按钮，可控制 FAQ（MySQL + Redis）与意图分类。
 - 接入 LangSmith 对问题改写与 RAG 回答的调用追踪。
+- 已验证 Agent 未请求工具时不会联网、请求工具后才会写入网页引用；定向单元测试共 24 项通过。
 
 ## 快速开始
 

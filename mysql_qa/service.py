@@ -105,7 +105,7 @@ class MysqlQaService:
             )
 
         decision = self._query_router.route(user_question)
-        route_to_rag_qa = decision.target_route in {"rag_qa", "web_rag"}
+        route_to_rag_qa = decision.target_route == "rag_qa"
         self._logger.info(
             "FAQ unresolved route: reason=%s label=%s router_confidence=%.4f target=%s",
             reason,

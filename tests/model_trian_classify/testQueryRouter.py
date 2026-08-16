@@ -10,13 +10,13 @@ class FakePredictor:
         return self._label_id, self._confidence
 
 
-def testRoutesConfidentGeneralKnowledgeToWebAndRag() -> None:
+def testRoutesConfidentGeneralKnowledgeToLocalRag() -> None:
     router = QueryRouter(FakePredictor(label_id=0, confidence=0.92))  # type: ignore[arg-type]
 
     decision = router.route("What is Python?")
 
     assert decision.label is RouteLabel.GENERAL_KNOWLEDGE
-    assert decision.target_route == "web_rag"
+    assert decision.target_route == "rag_qa"
 
 
 def testRoutesLowConfidenceAndProfessionalQuestionsToRagQa() -> None:

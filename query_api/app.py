@@ -75,7 +75,7 @@ def create_default_services(app_settings: Settings = settings) -> QueryApiServic
         app_settings,
         MilvusHybridRetriever(app_settings),
         BgeParentReranker(),
-        LangChainAnswerModel(app_settings),
+        LangChainAnswerModel(app_settings, web_searcher=DuckDuckGoWebSearcher(app_settings)),
     )
     return QueryApiServices(
         mysql_client=mysql_client,
@@ -88,7 +88,6 @@ def create_default_services(app_settings: Settings = settings) -> QueryApiServic
             rewrite_service,
             rag_service,
             feature_flags,
-            DuckDuckGoWebSearcher(app_settings),
         ),
     )
 

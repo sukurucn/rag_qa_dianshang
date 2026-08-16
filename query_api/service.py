@@ -11,9 +11,7 @@ from query_api.feature_flags import FeatureFlagService
 from query_api.models import QueryAnswer, QueryCitation, WebCitation
 from question_rewrite.models import RewriteResult
 from question_rewrite.service import QuestionRewriteService
-from rag_qa.models import WebSearchResult
 from rag_qa.service import RagQaService
-from web_search.duckduckgo import DuckDuckGoWebSearcher
 
 
 class QueryAnswerService:
@@ -27,7 +25,6 @@ class QueryAnswerService:
         rewrite_service: QuestionRewriteService,
         rag_service: RagQaService,
         feature_flags: FeatureFlagService,
-        web_searcher: DuckDuckGoWebSearcher,
     ) -> None:
         self._settings = app_settings
         self._faq_service = faq_service
@@ -35,7 +32,6 @@ class QueryAnswerService:
         self._rewrite_service = rewrite_service
         self._rag_service = rag_service
         self._feature_flags = feature_flags
-        self._web_searcher = web_searcher
         self._logger = get_logger("query_api.service")
 
     def answer(self, question: str) -> QueryAnswer:
@@ -67,16 +63,11 @@ class QueryAnswerService:
         classification: str | None = None
         classification_confidence: float | None = None
         classification_fallback: str | None = None
-        web_search_used = False
-        web_results: tuple[WebSearchResult, ...] = ()
         if flags.classifier_enabled:
             try:
                 decision = self._query_router.route(normalized_question)
                 classification = decision.label.value
                 classification_confidence = decision.confidence
-                if decision.target_route == "web_rag":
-                    web_search_used = True
-                    web_results = self._web_searcher.search(normalized_question)
             except Exception:
                 self._logger.exception("Query classification failed; treating question as professional")
                 classification = RouteLabel.PROFESSIONAL_CONSULTATION.value
@@ -91,7 +82,7 @@ class QueryAnswerService:
                 if classification is not None
                 else RewriteResult(normalized_question, (normalized_question,), (), 0, 0, 0)
             )
-            rag_result = self._rag_service.answer(rewrite_result, web_results)
+            rag_result = self._rag_service.answer(rewrite_result)
         except Exception:
             self._logger.exception("Query orchestration failed; returning customer service phone")
             return self._customer_service(faq_result, classification, classification_confidence)
@@ -124,7 +115,7 @@ class QueryAnswerService:
             classification_confidence=classification_confidence,
             fallback_reason=rag_result.fallback_reason or classification_fallback,
             web_citations=web_citations,
-            web_search_used=web_search_used,
+            web_search_used=bool(rag_result.web_results),
         )
 
     def _customer_service(

@@ -11,7 +11,6 @@ from rag_qa.models import (
     ParentReranker,
     ParentRetriever,
     RagQaResult,
-    WebSearchResult,
 )
 
 
@@ -34,28 +33,25 @@ class RagQaService:
     def answer(
         self,
         rewrite_result: RewriteResult,
-        web_results: tuple[WebSearchResult, ...] = (),
     ) -> RagQaResult:
         """按父块数量执行电话回退、直接回答或 rerank 后回答。"""
         try:
             report = self._retriever.retrieve(rewrite_result.rag_queries)
             parents = report.parents
-            if not parents and not web_results:
-                return self._customer_service("no_parent_context")
             if len(parents) >= self._settings.rag_final_parent_count:
                 ranked_parents = self._reranker.rerank(rewrite_result.rag_queries, parents)
                 parents = tuple(ranked_parents[: self._settings.rag_final_parent_count])
                 self._logger.info("rag rerank selected parent_count=%s", len(parents))
-            answer = self._answer_model.answer(
-                rewrite_result.original_question,
-                parents,
-                web_results,
-            )
-            if answer == "UNANSWERABLE":
+            generation = self._answer_model.answer(rewrite_result.original_question, parents)
+            if generation.text == "UNANSWERABLE":
                 return self._customer_service("answer_not_grounded", parents)
-            if not answer:
+            if not generation.text:
                 return self._customer_service("empty_answer", parents)
-            return RagQaResult(answer=answer, parents=parents, web_results=web_results)
+            return RagQaResult(
+                answer=generation.text,
+                parents=parents,
+                web_results=generation.web_results,
+            )
         except Exception:
             self._logger.exception("rag_qa failed; returning customer service phone")
             return self._customer_service("rag_qa_error")

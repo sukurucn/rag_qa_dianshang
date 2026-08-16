@@ -78,7 +78,7 @@ class HuggingFaceQueryPredictor:
 
 
 class QueryRouter:
-    """分类 FAQ 未命中的问题，区分通用知识的网络补充路径。"""
+    """分类 FAQ 未命中的问题，供后续改写和回答 Agent 使用。"""
 
     def __init__(
         self,
@@ -109,11 +109,9 @@ class QueryRouter:
         if label_id not in ID_TO_LABEL:
             raise RuntimeError(f"The model returned unsupported label id: {label_id}")
         label = RouteLabel(ID_TO_LABEL[label_id])
-        target_route = (
-            "web_rag"
-            if label is RouteLabel.GENERAL_KNOWLEDGE and confidence >= self._confidence_threshold
-            else "rag_qa"
-        )
+        # 无论分类结果如何，均先进入本地 RAG。联网是回答 Agent 在拿到
+        # Milvus 上下文之后可选调用的工具，而不是分类阶段的分支。
+        target_route = "rag_qa"
         self._logger.info(
             "query router: label=%s confidence=%.4f target=%s",
             label.value,
