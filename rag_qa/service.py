@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+from langchain_core.messages import BaseMessage
+
 from base.config import Settings
 from base.logger import get_logger
 from question_rewrite.models import RewriteResult
@@ -33,6 +37,7 @@ class RagQaService:
     def answer(
         self,
         rewrite_result: RewriteResult,
+        history: Sequence[BaseMessage] = (),
     ) -> RagQaResult:
         """按父块数量执行电话回退、直接回答或 rerank 后回答。"""
         try:
@@ -42,7 +47,11 @@ class RagQaService:
                 ranked_parents = self._reranker.rerank(rewrite_result.rag_queries, parents)
                 parents = tuple(ranked_parents[: self._settings.rag_final_parent_count])
                 self._logger.info("rag rerank selected parent_count=%s", len(parents))
-            generation = self._answer_model.answer(rewrite_result.original_question, parents)
+            generation = (
+                self._answer_model.answer(rewrite_result.original_question, parents, history)
+                if history
+                else self._answer_model.answer(rewrite_result.original_question, parents)
+            )
             if generation.text == "UNANSWERABLE":
                 return self._customer_service("answer_not_grounded", parents)
             if not generation.text:

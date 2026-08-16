@@ -18,6 +18,10 @@ uploads/
 admin_api/logs/
 .streamlit/secrets.toml
 
+# Vue build artifacts
+frontend/node_modules/
+frontend/dist/
+
 # Query-router training artifacts
 model_trian_classify/logs/
 model_trian_classify/model/

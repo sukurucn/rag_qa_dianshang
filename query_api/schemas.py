@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -11,6 +12,7 @@ class QueryRequest(BaseModel):
     """一次用户提问。"""
 
     question: str = Field(min_length=1, max_length=4000)
+    session_id: str | None = Field(default=None, min_length=36, max_length=36)
 
     @field_validator("question")
     @classmethod
@@ -51,6 +53,48 @@ class QueryResponse(BaseModel):
     fallback_reason: str | None = None
     web_citations: list[WebCitationResponse] = Field(default_factory=list)
     web_search_used: bool = False
+    session_id: str
+    turn_number: int = Field(ge=0)
+    selected_memory_turns: int = Field(ge=0)
+
+
+class SessionCreateRequest(BaseModel):
+    """创建一个可恢复会话。"""
+
+    title: str | None = Field(default=None, max_length=128)
+    memory_turn_limit: int = Field(default=12, ge=0, le=256)
+
+
+class SessionUpdateRequest(BaseModel):
+    """局部更新会话标题或历史轮次上限。"""
+
+    title: str | None = Field(default=None, max_length=128)
+    memory_turn_limit: int | None = Field(default=None, ge=0, le=256)
+
+    @model_validator(mode="after")
+    def requires_a_change(self) -> SessionUpdateRequest:
+        if self.title is None and self.memory_turn_limit is None:
+            raise ValueError("at least one session field must be supplied")
+        return self
+
+
+class SessionResponse(BaseModel):
+    """会话元数据。"""
+
+    session_id: str
+    title: str
+    memory_turn_limit: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationTurnResponse(BaseModel):
+    """一轮已持久化对话。"""
+
+    turn_number: int
+    user_question: str
+    assistant_answer: str
+    created_at: datetime
 
 
 class FeatureFlagsResponse(BaseModel):

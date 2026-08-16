@@ -6,6 +6,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from langchain_core.messages import BaseMessage
+
 from dataprocess.models import Embedding
 
 
@@ -79,5 +81,10 @@ class ParentReranker(Protocol):
 class AnswerModel(Protocol):
     """只根据指定父块生成可引用回答的模型。"""
 
-    def answer(self, question: str, parents: Sequence[ParentChunk]) -> AnswerGeneration:
+    def answer(
+        self,
+        question: str,
+        parents: Sequence[ParentChunk],
+        history: Sequence[BaseMessage] = (),
+    ) -> AnswerGeneration:
         """回答问题；无依据时返回约定的 UNANSWERABLE 标记。"""

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+from langchain_core.messages import BaseMessage
+
 from base.config import Settings
 from base.logger import get_logger
 from model_trian_classify.query_router import QueryRouter, RouteLabel
@@ -34,7 +38,7 @@ class QueryAnswerService:
         self._feature_flags = feature_flags
         self._logger = get_logger("query_api.service")
 
-    def answer(self, question: str) -> QueryAnswer:
+    def answer(self, question: str, history: Sequence[BaseMessage] = ()) -> QueryAnswer:
         """执行完整问答链路，并将不可恢复错误转换为客服电话。"""
         normalized_question = question.strip()
         if not normalized_question:
@@ -77,12 +81,19 @@ class QueryAnswerService:
             self._logger.info("Intent-classifier module disabled; routing directly to RAG")
 
         try:
-            rewrite_result = (
-                self._rewrite_service.rewrite(normalized_question, classification)
-                if classification is not None
-                else RewriteResult(normalized_question, (normalized_question,), (), 0, 0, 0)
+            if classification is not None:
+                rewrite_result = (
+                    self._rewrite_service.rewrite(normalized_question, classification, history)
+                    if history
+                    else self._rewrite_service.rewrite(normalized_question, classification)
+                )
+            else:
+                rewrite_result = RewriteResult(normalized_question, (normalized_question,), (), 0, 0, 0)
+            rag_result = (
+                self._rag_service.answer(rewrite_result, history)
+                if history
+                else self._rag_service.answer(rewrite_result)
             )
-            rag_result = self._rag_service.answer(rewrite_result)
         except Exception:
             self._logger.exception("Query orchestration failed; returning customer service phone")
             return self._customer_service(faq_result, classification, classification_confidence)

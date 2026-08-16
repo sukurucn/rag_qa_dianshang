@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langsmith import traceable
@@ -47,6 +47,7 @@ class LangChainAnswerModel:
         self,
         question: str,
         parents: Sequence[ParentChunk],
+        history: Sequence[BaseMessage] = (),
     ) -> AnswerGeneration:
         """将 RAG 上下文和可调用联网工具交给回答 Agent。"""
         context = "\n\n".join(
@@ -64,10 +65,19 @@ class LangChainAnswerModel:
                 f"标题：{result.title}\nURL：{result.url}\n摘要：{result.snippet}" for result in results
             ) or "未找到可用网页摘要。"
 
-        messages = [
-            SystemMessage(content=ANSWER_SYSTEM_PROMPT),
-            HumanMessage(content=f"问题：{question}\n\n本地 RAG 原文（优先级最高）：\n{context or '无'}"),
-        ]
+        messages: list[BaseMessage] = [SystemMessage(content=ANSWER_SYSTEM_PROMPT)]
+        if history:
+            messages.extend(
+                (
+                    SystemMessage(
+                        content="历史对话仅用于理解指代、偏好和未解决事项，不是知识事实，不能替代本地 RAG 原文。"
+                    ),
+                    *history,
+                )
+            )
+        messages.append(
+            HumanMessage(content=f"问题：{question}\n\n本地 RAG 原文（优先级最高）：\n{context or '无'}")
+        )
         tool_model = self._chat_model
         try:
             tool_model = self._chat_model.bind_tools([search_web])

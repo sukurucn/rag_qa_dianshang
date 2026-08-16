@@ -12,7 +12,8 @@
 - 向量检索：BGE-M3 生成 1024 维稠密向量与稀疏词法向量，存入现有 Milvus collection `document_chunks_v2`。
 - 问答路由：FAQ 未命中时，可由微调/蒸馏后的中文小模型判断“通用知识”或“专业咨询”；两类问题都会先进入本地 Milvus RAG，专业咨询额外执行问题改写。分类关闭时原问题也会直接进入本地 RAG。
 - RAG 回答：稠密/稀疏混合检索、父块回查、BGE reranker 重排，并返回引用原文；本地 RAG 原文始终高于网络摘要。
-- 模块控制：Streamlit 的“模块控制”页可持久开关 FAQ（MySQL + Redis）和意图分类；关闭任一模块会跳过它直接进入 RAG。
+- 会话记忆：服务端生成稳定 `session_id`，按会话在 MySQL 持久化 `0–256` 轮对话；每次仅选择与当前问题相关的历史和压缩摘要参与改写与回答。
+- 模块控制：Vue 工作台可持久开关 FAQ（MySQL + Redis）和意图分类；关闭任一模块会跳过它直接进入 RAG。
 - 本地管理 API：管理 QA、上传文档、查询异步入库任务、删除已入库文档及其 Milvus 父子块。
 
 ## 运行链路
@@ -52,11 +53,13 @@ flowchart LR
 base/                     配置加载、统一日志
 admin_api/                本地知识库管理 FastAPI 服务（端口 8001）
 query_api/                面向用户的问答 FastAPI 服务（端口 8000）
+conversation_memory/      会话 ID、MySQL 历史轮次、摘要与相关记忆选择
 mysql_qa/                 MySQL FAQ、Redis warmup 与 BM25 匹配
 dataprocess/              文档解析、MinerU、父子分块、BGE-M3、Milvus 写入
 question_rewrite/         专业咨询问题改写策略与 OpenAI 兼容模型调用
 rag_qa/                   混合检索、父块回查、重排与带引用回答
 model_trian_classify/     中文分类教师训练、学生蒸馏与运行时路由
+frontend/                 Vue 3 + TypeScript 本地客服工作台（端口 5173）
 tests/                    不依赖真实数据库/模型的单元测试
 docker-compose.yml        MySQL、Redis、Milvus、etcd、MinIO 本地基础设施
 .env.example              可提交的配置模板
@@ -66,6 +69,7 @@ docker-compose.yml        MySQL、Redis、Milvus、etcd、MinIO 本地基础设�
 
 - Python 3.10（由 `.python-version` 固定）
 - [uv](https://docs.astral.sh/uv/)
+- Node.js 20 或更高版本（用于 Vue 工作台）
 - Docker Desktop（Linux containers）
 - 可选：NVIDIA GPU + 可用 CUDA。BGE-M3 与分类训练检测到 CUDA 后会使用 GPU；分类训练要求 CUDA，不会静默回退 CPU。
 
@@ -87,9 +91,9 @@ model_trian_classify/model/best_model/     四层中文 RoBERTa 蒸馏学生模�
 - 修复本地 BGE Reranker 与 Transformers 的兼容性，并恢复 GPU 重排序。
 - FAQ 使用 jieba 分词与全量 Redis 问题 softmax 置信度；MySQL 读取事务快照已修复。
 - 所有 RAG 问题先完成 Milvus 检索与重排；回答 Agent 再自行决定是否调用 DuckDuckGo 工具补充公开信息，回答提示词规定本地原文优先。
-- 新增持久化模块开关和 Streamlit 首页侧栏按钮，可控制 FAQ（MySQL + Redis）与意图分类。
+- 新增 MySQL 会话记忆：支持 `0–256` 轮保留、历史摘要与相关历史选择；Vue 工作台提供会话列表、上传文档、FAQ 导入和响应开关。
 - 接入 LangSmith 对问题改写与 RAG 回答的调用追踪。
-- 已验证 Agent 未请求工具时不会联网、请求工具后才会写入网页引用；定向单元测试共 24 项通过。
+- 已完成第二版发布验收：全量 Python 测试 71 项通过、Ruff 与 Mypy 检查通过、Vue 生产构建通过；本机会话 API、管理 API 和 Vue 工作台均已启动验证。
 
 ## 快速开始
 
@@ -139,7 +143,7 @@ docker compose ps
 
 ### 4. 启动服务
 
-在两个 PowerShell 窗口中分别运行：
+在三个 PowerShell 窗口中分别运行：
 
 ```powershell
 # 本地知识库管理 API
@@ -148,16 +152,19 @@ uv run uvicorn admin_api.main:app --host 127.0.0.1 --port 8001
 # 用户问答 API
 uv run uvicorn query_api.main:app --host 127.0.0.1 --port 8000
 
-# Streamlit 本地对话界面
-uv run streamlit run src/streamlitFrontend/app.py --server.address 127.0.0.1 --server.port 8501
+# Vue + TypeScript 本地工作台
+Set-Location frontend
+npm.cmd install
+npm.cmd run dev
 ```
 
 交互式接口文档：
 
 - 管理 API：http://127.0.0.1:8001/docs
 - 问答 API：http://127.0.0.1:8000/docs
-- 对话界面：http://127.0.0.1:8501
-- 模块控制页：http://127.0.0.1:8501/模块控制
+- Vue 工作台：http://127.0.0.1:5173
+
+`src/streamlitFrontend/` 在迁移期仍保留，Vue 工作台验收后再移除 Streamlit 依赖和旧页面。
 
 ## 管理 API
 
@@ -207,10 +214,16 @@ curl.exe -X POST http://127.0.0.1:8001/admin/documents -F "file=@manual.pdf"
 ## 用户问答 API
 
 ```powershell
+# 首次创建会话
+$session = Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8000/sessions `
+  -ContentType 'application/json' `
+  -Body '{"memory_turn_limit":12}'
+
 Invoke-RestMethod -Method Post `
   -Uri http://127.0.0.1:8000/query `
   -ContentType 'application/json' `
-  -Body '{"question":"你们的退货期限是多久？"}'
+  -Body ("{`"question`":`"你们的退货期限是多久？`",`"session_id`":`"{0}`"}" -f $session.session_id)
 ```
 
 响应包含：
@@ -220,6 +233,10 @@ Invoke-RestMethod -Method Post `
 - `classification`、`classification_confidence`：未命中 FAQ 时的路由结果
 - `citations`：父块引用（`source`、章节路径、原文）
 - `faq_confidence`、`fallback_reason`：FAQ 匹配与兜底信息
+- `session_id`、`turn_number`、`selected_memory_turns`：本轮会话和实际采用的历史数量
+- `web_search_used`、`web_citations`：回答 Agent 是否实际调用联网搜索及其网页来源
+
+会话接口：`POST /sessions` 创建会话；`GET /sessions` 查看会话列表；`GET /sessions/{session_id}/turns` 读取历史；`PATCH /sessions/{session_id}` 更新标题或 `memory_turn_limit`；`DELETE /sessions/{session_id}` 删除会话与记忆。设置为 `0` 时不会保存或注入对话内容。
 
 已有 `document_chunks_v2` collection 保持当前 schema 不变。若需将已有 collection 的稠密索引显式切换为 IVF_FLAT，请在维护窗口执行：
 
