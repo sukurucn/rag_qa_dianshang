@@ -16,6 +16,29 @@
 - 模块控制：Vue 工作台可持久开关 FAQ（MySQL + Redis）和意图分类；关闭任一模块会跳过它直接进入 RAG。
 - 本地管理 API：管理 QA、上传文档、查询异步入库任务、删除已入库文档及其 Milvus 父子块。
 
+## 系统架构
+
+![RAG Agentic 项目架构](docs/images/rag-agentic-architecture.png)
+
+架构图包含两条主要链路：用户问题经 Vue 工作台进入问答 API，依次完成会话记忆、FAQ、意图分类、可选改写、Milvus 混合检索、重排和回答；知识库管理 API 则负责 FAQ 导入与文档解析、父子分块、向量化和持久化。
+
+## 技术栈
+
+| 层级 | 技术 | 项目中的用途 |
+| --- | --- | --- |
+| 前端 | Vue 3、TypeScript、Vite | 会话问答、文档管理、FAQ 导入和运行时模块开关 |
+| API | Python 3.10、FastAPI、Uvicorn、Pydantic | 提供用户问答 API 与本地知识库管理 API |
+| LLM 编排 | LangChain Core、LangChain OpenAI、LangSmith | 问题改写、回答 Agent、工具调用与链路追踪 |
+| FAQ | MySQL 8.4、Redis 7.4、jieba、BM25 | FAQ 持久化、问题缓存、中文分词和高置信度快速命中 |
+| RAG 检索 | BGE-M3、FlagEmbedding、Milvus 2.5.27 | 生成 1024 维稠密向量和稀疏向量，并执行混合检索 |
+| 重排序 | BGE Reranker Large | 对召回的父块进行本地重排序并选择最终上下文 |
+| 意图分类 | Transformers、PyTorch、scikit-learn | 教师模型训练、学生模型蒸馏及通用知识/专业咨询路由 |
+| 文档处理 | MinerU、PyPDF、python-docx | 解析 PDF、PPT/PPTX、DOCX、Markdown 和文本文件 |
+| 会话记忆 | MySQL、jieba、LangChain Messages | 保存会话与轮次，选择相关历史并维护压缩摘要 |
+| 联网补充 | DuckDuckGo、ddgs | 由回答 Agent 在本地 RAG 信息不足时自主调用 |
+| 基础设施 | Docker Compose、etcd、MinIO | 编排 MySQL、Redis 和 Milvus 及其持久化依赖 |
+| 工程质量 | uv、pytest、Ruff、Mypy | 依赖锁定、单元测试、静态检查和类型检查 |
+
 ## 运行链路
 
 ```mermaid
